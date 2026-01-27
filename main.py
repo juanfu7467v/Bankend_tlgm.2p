@@ -150,7 +150,6 @@ async def send_telegram_command(command: str, consulta_id: str = None, endpoint_
         
         # Verificar estado de bots
         primary_blocked = is_bot_blocked(LEDERDATA_BOT_ID)
-        backup_blocked = is_bot_blocked(LEDERDATA_BACKUP_BOT_ID)
         
         # Decidir qué bot usar primero
         bot_to_use = None
@@ -159,11 +158,10 @@ async def send_telegram_command(command: str, consulta_id: str = None, endpoint_
         if not primary_blocked:
             bot_to_use = LEDERDATA_BOT_ID
             use_backup = False
-        elif not backup_blocked:
+        else:
+            # Si el bot principal está bloqueado, usar directamente el backup
             bot_to_use = LEDERDATA_BACKUP_BOT_ID
             use_backup = True
-        else:
-            raise Exception("Todos los bots están temporalmente bloqueados. Espere 3 horas.")
         
         all_received_messages = []
         all_files_data = []
@@ -201,7 +199,7 @@ async def send_telegram_command(command: str, consulta_id: str = None, endpoint_
                 
                 # Detectar anti-spam inmediatamente
                 if "ANTI-SPAM" in raw_text and "INTENTA DESPUÉS DE 10 SEGUNDOS" in raw_text:
-                    if not use_backup and not backup_blocked:
+                    if not use_backup:
                         # Anti-spam en bot principal, marcar para usar backup
                         stop_collecting.set()
                     return
@@ -236,11 +234,12 @@ async def send_telegram_command(command: str, consulta_id: str = None, endpoint_
         
         # Analizar respuestas recibidas
         if not all_received_messages:
-            # No hubo respuesta - registrar fallo del bot
-            record_bot_failure(bot_to_use)
+            # No hubo respuesta - registrar fallo solo si es el bot principal
+            if bot_to_use == LEDERDATA_BOT_ID:
+                record_bot_failure(bot_to_use)
             
-            # Si era el bot principal y hay backup disponible, intentar con backup
-            if not use_backup and not backup_blocked:
+            # Si era el bot principal y no recibimos respuesta, intentar con backup
+            if not use_backup:
                 # Esperar 5 segundos antes de intentar con backup
                 await asyncio.sleep(5)
                 
@@ -303,7 +302,7 @@ async def send_telegram_command(command: str, consulta_id: str = None, endpoint_
                 client.remove_event_handler(backup_handler)
                 
                 if not all_received_messages:
-                    record_bot_failure(bot_to_use)
+                    # NOTA: No registramos fallo para el bot de respaldo
                     raise Exception("No se obtuvo respuesta de ningún bot.")
             else:
                 raise Exception("No se obtuvo respuesta del bot.")
@@ -417,14 +416,15 @@ def universal_handler(endpoint):
 def handle_special(endpoint):
     if endpoint == "status":
         primary_blocked = is_bot_blocked(LEDERDATA_BOT_ID)
-        backup_blocked = is_bot_blocked(LEDERDATA_BACKUP_BOT_ID)
+        # El bot de respaldo nunca se bloquea, siempre está disponible
+        backup_blocked = False
         return jsonify({
             "status": "online", 
             "bots": ALL_BOT_IDS,
             "primary_blocked": primary_blocked,
             "backup_blocked": backup_blocked,
             "primary_blocked_until": bot_fail_tracker.get(LEDERDATA_BOT_ID) if primary_blocked else None,
-            "backup_blocked_until": bot_fail_tracker.get(LEDERDATA_BACKUP_BOT_ID) if backup_blocked else None
+            "backup_blocked_until": None  # Siempre None para el bot de respaldo
         })
     
     if endpoint == "health":
