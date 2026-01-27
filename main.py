@@ -18,7 +18,7 @@ from telethon.errors.rpcerrorlist import UserBlockedError
 # --- Configuración y Variables de Entorno ---
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
-PUBLIC_URL = os.getenv("PUBLIC_URL", "https://consulta-pe-bot.up.railway.app").rstrip("/")
+PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")
 SESSION_STRING = os.getenv("SESSION_STRING", None)
 PORT = int(os.getenv("PORT", 8080))
 
@@ -32,12 +32,13 @@ ALL_BOT_IDS = [LEDERDATA_BOT_ID, LEDERDATA_BACKUP_BOT_ID]
 
 TIMEOUT_PRIMARY = 35  
 TIMEOUT_BACKUP = 50   
-BOT_BLOCK_HOURS = 4   
+BOT_BLOCK_HOURS = 3   # Cambiado a 3 horas según especificación
 
 # --- Trackeo de Fallos de Bots ---
 bot_fail_tracker = {}
 
 def is_bot_blocked(bot_id: str) -> bool:
+    """Verifica si un bot está bloqueado (no responde)"""
     last_fail_time = bot_fail_tracker.get(bot_id)
     if not last_fail_time:
         return False
@@ -45,10 +46,12 @@ def is_bot_blocked(bot_id: str) -> bool:
     block_time_ago = now - timedelta(hours=BOT_BLOCK_HOURS)
     if last_fail_time > block_time_ago:
         return True
+    # Si ya pasó el tiempo de bloqueo, limpiar el registro
     bot_fail_tracker.pop(bot_id, None)
     return False
 
 def record_bot_failure(bot_id: str):
+    """Registra un fallo de bot (no respuesta)"""
     bot_fail_tracker[bot_id] = datetime.now()
 
 # --- Lógica de Limpieza y Extracción de Datos ---
@@ -93,6 +96,7 @@ def clean_and_extract(raw_text: str):
     if photo_type_match: 
         fields["photo_type"] = photo_type_match.group(1).lower()
     
+    # Detectar mensaje de "no se encontró información"
     not_found_pattern = r"\[⚠️\]\s*(no se encontro información|no se han encontrado resultados|no se encontró una|no hay resultados|no tenemos datos|no se encontraron registros)"
     if re.search(not_found_pattern, text, re.IGNORECASE | re.DOTALL):
          fields["not_found"] = True
@@ -130,10 +134,9 @@ def format_nm_response(all_received_messages):
         formatted_lines = [line.strip() for line in lines if line.strip() and not line.strip().startswith('[') and not 'LEDER' in line.upper()]
         return json.dumps({"status": "success", "message": '\n'.join(formatted_lines)}, ensure_ascii=False)
 
-# --- Función Principal para Envío de Comandos ---
+# --- Función Principal para Envío de Comandos CORREGIDA ---
 async def send_telegram_command(command: str, consulta_id: str = None, endpoint_path: str = None):
     client = None
-    handler_removed = False
     try:
         if API_ID == 0 or not API_HASH or not SESSION_STRING:
             raise Exception("Credenciales de Telegram no configuradas.")
@@ -145,33 +148,44 @@ async def send_telegram_command(command: str, consulta_id: str = None, endpoint_
         if not await client.is_user_authorized():
             raise Exception("Cliente no autorizado.")
         
-        dni_match = re.search(r"/\w+\s+(\d{8,11})", command)
-        dni = dni_match.group(1) if dni_match else None
-        
+        # Verificar estado de bots
         primary_blocked = is_bot_blocked(LEDERDATA_BOT_ID)
         backup_blocked = is_bot_blocked(LEDERDATA_BACKUP_BOT_ID)
         
+        # Decidir qué bot usar primero
+        bot_to_use = None
+        use_backup = False
+        
         if not primary_blocked:
-            bot_to_use_first, bot_to_use_backup = LEDERDATA_BOT_ID, (None if backup_blocked else LEDERDATA_BACKUP_BOT_ID)
+            bot_to_use = LEDERDATA_BOT_ID
+            use_backup = False
         elif not backup_blocked:
-            bot_to_use_first, bot_to_use_backup = LEDERDATA_BACKUP_BOT_ID, None
+            bot_to_use = LEDERDATA_BACKUP_BOT_ID
+            use_backup = True
         else:
-            raise Exception("Todos los bots están temporalmente bloqueados.")
+            raise Exception("Todos los bots están temporalmente bloqueados. Espere 3 horas.")
         
         all_received_messages = []
         all_files_data = []
         stop_collecting = asyncio.Event()
         last_message_time = [time.time()]
-        current_bot_id = None
         
+        # Handler temporal para capturar respuestas
         @client.on(events.NewMessage(incoming=True))
         async def temp_handler(event):
-            if stop_collecting.is_set() or not current_bot_id: return
+            if stop_collecting.is_set():
+                return
+            
             try:
-                entity = await client.get_entity(current_bot_id)
-                if event.sender_id != entity.id: return
+                # Verificar que el mensaje viene del bot que estamos usando
+                entity = await client.get_entity(bot_to_use)
+                if event.sender_id != entity.id:
+                    return
+                
                 last_message_time[0] = time.time()
                 raw_text = event.raw_text or ""
+                
+                # Limpiar y extraer datos según el tipo de consulta
                 if endpoint_path in ["/dni_nombres", "/venezolanos_nombres"] or command.startswith(("/nm", "/nmv")):
                     cleaned = {"text": raw_text, "fields": {}}
                 else:
@@ -184,67 +198,161 @@ async def send_telegram_command(command: str, consulta_id: str = None, endpoint_
                     "event_message": event.message
                 }
                 all_received_messages.append(msg_obj)
-            except: pass
+                
+                # Detectar anti-spam inmediatamente
+                if "ANTI-SPAM" in raw_text and "INTENTA DESPUÉS DE 10 SEGUNDOS" in raw_text:
+                    if not use_backup and not backup_blocked:
+                        # Anti-spam en bot principal, marcar para usar backup
+                        stop_collecting.set()
+                    return
+                
+                # Detectar "no se encontró información"
+                if re.search(r"\[⚠️\]\s*no se encontro información", raw_text, re.IGNORECASE):
+                    stop_collecting.set()
+                    return
+                    
+            except Exception as e:
+                print(f"Error en handler: {e}")
 
-        # Ciclo de Intento
-        for bot_id in [bot_to_use_first, bot_to_use_backup]:
-            if not bot_id: continue
-            current_bot_id = bot_id
-            all_received_messages = []
-            await client.send_message(bot_id, command)
+        # Enviar comando UNA SOLA VEZ al bot seleccionado
+        await client.send_message(bot_to_use, command)
+        
+        # Esperar respuestas
+        start_time = time.time()
+        timeout_val = TIMEOUT_PRIMARY if bot_to_use == LEDERDATA_BOT_ID else TIMEOUT_BACKUP
+        
+        while (time.time() - start_time) < timeout_val:
+            if stop_collecting.is_set():
+                break
             
-            start_time = time.time()
-            timeout_val = 65 if "/nm" in command else (TIMEOUT_PRIMARY if bot_id == LEDERDATA_BOT_ID else TIMEOUT_BACKUP)
+            # Si no hay respuestas después de un tiempo, esperar
+            if all_received_messages and (time.time() - last_message_time[0]) > 4.5:
+                break
+                
+            await asyncio.sleep(0.5)
+        
+        # Remover handler
+        client.remove_event_handler(temp_handler)
+        
+        # Analizar respuestas recibidas
+        if not all_received_messages:
+            # No hubo respuesta - registrar fallo del bot
+            record_bot_failure(bot_to_use)
             
-            while (time.time() - start_time) < timeout_val:
-                if all_received_messages and (time.time() - last_message_time[0]) > 4.5: break
-                await asyncio.sleep(0.5)
-            
-            if not all_received_messages:
-                record_bot_failure(bot_id)
-                continue
-            
-            anti_spam = any("ANTI-SPAM" in m["message"] for m in all_received_messages)
-            if anti_spam and bot_id == LEDERDATA_BOT_ID and bot_to_use_backup:
+            # Si era el bot principal y hay backup disponible, intentar con backup
+            if not use_backup and not backup_blocked:
+                # Esperar 5 segundos antes de intentar con backup
                 await asyncio.sleep(5)
-                continue
-            
-            stop_collecting.set()
-            return await process_bot_response(client, temp_handler, all_received_messages, all_files_data, handler_removed, command, endpoint_path)
-            
-        raise Exception("No se obtuvo respuesta de ningún bot.")
+                
+                # Configurar para usar backup
+                bot_to_use = LEDERDATA_BACKUP_BOT_ID
+                use_backup = True
+                
+                # Crear nuevo handler para backup
+                @client.on(events.NewMessage(incoming=True))
+                async def backup_handler(event):
+                    if stop_collecting.is_set():
+                        return
+                    
+                    try:
+                        entity = await client.get_entity(bot_to_use)
+                        if event.sender_id != entity.id:
+                            return
+                        
+                        last_message_time[0] = time.time()
+                        raw_text = event.raw_text or ""
+                        
+                        if endpoint_path in ["/dni_nombres", "/venezolanos_nombres"] or command.startswith(("/nm", "/nmv")):
+                            cleaned = {"text": raw_text, "fields": {}}
+                        else:
+                            cleaned = clean_and_extract(raw_text)
+                        
+                        msg_obj = {
+                            "message": cleaned["text"],
+                            "fields": cleaned["fields"],
+                            "urls": [],
+                            "event_message": event.message
+                        }
+                        all_received_messages.append(msg_obj)
+                        
+                        # Detectar "no se encontró información" en backup
+                        if re.search(r"\[⚠️\]\s*no se encontro información", raw_text, re.IGNORECASE):
+                            stop_collecting.set()
+                            return
+                            
+                    except Exception as e:
+                        print(f"Error en backup handler: {e}")
+                
+                # Enviar comando UNA SOLA VEZ al backup
+                await client.send_message(bot_to_use, command)
+                
+                # Reiniciar temporizador
+                start_time = time.time()
+                last_message_time[0] = time.time()
+                
+                # Esperar respuesta del backup
+                while (time.time() - start_time) < TIMEOUT_BACKUP:
+                    if stop_collecting.is_set():
+                        break
+                    
+                    if all_received_messages and (time.time() - last_message_time[0]) > 4.5:
+                        break
+                        
+                    await asyncio.sleep(0.5)
+                
+                client.remove_event_handler(backup_handler)
+                
+                if not all_received_messages:
+                    record_bot_failure(bot_to_use)
+                    raise Exception("No se obtuvo respuesta de ningún bot.")
+            else:
+                raise Exception("No se obtuvo respuesta del bot.")
+        
+        # Procesar mensajes recibidos
+        return await process_bot_response(client, all_received_messages, command, endpoint_path)
                 
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
-        if client: await client.disconnect()
+        if client:
+            await client.disconnect()
 
-async def process_bot_response(client, temp_handler, all_received_messages, all_files_data, handler_removed, command, endpoint_path):
-    if not handler_removed: client.remove_event_handler(temp_handler)
-    
-    if any("formato correcto" in m["message"] for m in all_received_messages):
+async def process_bot_response(client, all_received_messages, command, endpoint_path):
+    # Verificar formato incorrecto
+    if any("formato correcto" in m["message"].lower() for m in all_received_messages):
         return {"status": "error", "message": "Formato incorrecto."}
+    
+    # Verificar "no se encontró información"
     if any(m["fields"].get("not_found") for m in all_received_messages):
         return {"status": "error", "message": "No se encontraron resultados."}
-
+    
+    # Verificar anti-spam en bot principal (ya manejado en la lógica principal)
+    
+    # Descargar archivos adjuntos
     for msg in all_received_messages:
         event_msg = msg.get("event_message")
         if event_msg and getattr(event_msg, "media", None):
             try:
+                # Determinar extensión basada en tipo de archivo
                 ext = ".pdf" if "pdf" in str(event_msg.media).lower() else ".jpg"
                 fname = f"{int(time.time())}_{event_msg.id}{ext}"
                 path = await client.download_media(event_msg, file=os.path.join(DOWNLOAD_DIR, fname))
                 if path:
                     msg["urls"].append({"url": f"{PUBLIC_URL}/files/{fname}", "type": "document"})
-            except: pass
+            except Exception as e:
+                print(f"Error descargando archivo: {e}")
 
+    # Formatear respuesta según tipo de consulta
     if endpoint_path in ["/dni_nombres", "/venezolanos_nombres"] or command.startswith(("/nm", "/nmv")):
         return json.loads(format_nm_response(all_received_messages))
 
+    # Combinar campos de todos los mensajes
     final_fields = {}
     urls = []
     for msg in all_received_messages:
-        final_fields.update({k: v for k, v in msg["fields"].items() if v})
+        for k, v in msg["fields"].items():
+            if v and not final_fields.get(k):
+                final_fields[k] = v
         urls.extend(msg["urls"])
     
     final_fields["urls"] = urls
@@ -253,15 +361,17 @@ async def process_bot_response(client, temp_handler, all_received_messages, all_
 def run_telegram_command(command: str, consulta_id: str = None, endpoint_path: str = None):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    try: return loop.run_until_complete(send_telegram_command(command, consulta_id, endpoint_path))
-    finally: loop.close()
+    try: 
+        return loop.run_until_complete(send_telegram_command(command, consulta_id, endpoint_path))
+    finally: 
+        loop.close()
 
 # --- HELPER DE COMANDOS ACTUALIZADO ---
 def get_command_and_param(path, request_args):
     cmd = path.lstrip('/')
     p = request_args.get("dni") or request_args.get("query") or request_args.get("pasaporte") or request_args.get("cedula") or request_args.get("direccion") or request_args.get("carnet_extranjeria") or request_args.get("cedula_identidad") or request_args.get("placa") or request_args.get("serie_armamento") or request_args.get("clave_denuncia")
     
-    # Mapeo según tus nuevos comandos
+    # Mapeo según comandos
     mapping = {
         "cla": f"/cla {p}",
         "afp": f"/afp {p}",
@@ -280,7 +390,8 @@ def get_command_and_param(path, request_args):
     }
     
     final_cmd = mapping.get(cmd)
-    if not final_cmd and not p: return None, "Parámetro faltante"
+    if not final_cmd and not p: 
+        return None, "Parámetro faltante"
     return final_cmd or f"/{cmd} {p}", None
 
 # --- APP FLASK ---
@@ -297,14 +408,25 @@ def universal_handler(endpoint):
         return handle_special(endpoint)
     
     command, error = get_command_and_param(endpoint, request.args)
-    if error: return jsonify({"status": "error", "message": error}), 400
+    if error: 
+        return jsonify({"status": "error", "message": error}), 400
     
     result = run_telegram_command(command, endpoint_path=f"/{endpoint}")
     return jsonify(result)
 
 def handle_special(endpoint):
     if endpoint == "status":
-        return jsonify({"status": "online", "bots": ALL_BOT_IDS})
+        primary_blocked = is_bot_blocked(LEDERDATA_BOT_ID)
+        backup_blocked = is_bot_blocked(LEDERDATA_BACKUP_BOT_ID)
+        return jsonify({
+            "status": "online", 
+            "bots": ALL_BOT_IDS,
+            "primary_blocked": primary_blocked,
+            "backup_blocked": backup_blocked,
+            "primary_blocked_until": bot_fail_tracker.get(LEDERDATA_BOT_ID) if primary_blocked else None,
+            "backup_blocked_until": bot_fail_tracker.get(LEDERDATA_BACKUP_BOT_ID) if backup_blocked else None
+        })
+    
     if endpoint == "health":
         return jsonify({"status": "healthy"})
     
@@ -313,12 +435,15 @@ def handle_special(endpoint):
         nom = unquote(request.args.get("nombres", "")).replace(" ", ",")
         pat = unquote(request.args.get("apepaterno", "")).replace(" ", "+")
         mat = unquote(request.args.get("apematerno", "")).replace(" ", "+")
-        if not pat or not mat: return jsonify({"error": "Faltan apellidos"}), 400
+        if not pat or not mat: 
+            return jsonify({"error": "Faltan apellidos"}), 400
         res = run_telegram_command(f"/nm {nom}|{pat}|{mat}", endpoint_path="/dni_nombres")
         return jsonify(res)
         
     if endpoint == "venezolanos_nombres":
         q = unquote(request.args.get("query", ""))
+        if not q:
+            return jsonify({"error": "Query faltante"}), 400
         res = run_telegram_command(f"/nmv {q}", endpoint_path="/venezolanos_nombres")
         return jsonify(res)
 
