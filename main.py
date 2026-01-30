@@ -58,33 +58,61 @@ def record_bot_failure(bot_id: str):
     """Registra un fallo de bot (no respuesta)"""
     bot_fail_tracker[bot_id] = datetime.now()
 
+# --- 🆕 PARSER UNIVERSAL ---
+def universal_parser(raw_text: str) -> dict:
+    """
+    Parser Universal: Detecta automáticamente campos con formato 'Clave: Valor'
+    y los convierte en un diccionario estructurado.
+    
+    Reglas:
+    - Detecta cualquier línea con formato: "Palabra(s): Valor"
+    - Normaliza claves (minúsculas, guiones bajos, sin espacios extras)
+    - Mantiene valores originales completos sin recortar
+    """
+    if not raw_text:
+        return {}
+    
+    parsed_data = {}
+    
+    # Patrón que captura: "Cualquier texto seguido de dos puntos: Valor"
+    # Captura multilínea para valores largos
+    pattern = r'^([^:\n]+):\s*(.+?)(?=\n[^:\n]+:|$)'
+    
+    matches = re.finditer(pattern, raw_text, re.MULTILINE | re.DOTALL)
+    
+    for match in matches:
+        key_raw = match.group(1).strip()
+        value_raw = match.group(2).strip()
+        
+        if not key_raw or not value_raw:
+            continue
+        
+        # Normalizar clave: minúsculas, reemplazar espacios por guiones bajos
+        key_normalized = re.sub(r'\s+', '_', key_raw.lower())
+        key_normalized = re.sub(r'[^\w_]', '', key_normalized)  # Eliminar caracteres especiales
+        
+        # Limpiar valor de saltos de línea extra pero mantener contenido completo
+        value_clean = re.sub(r'\s+', ' ', value_raw).strip()
+        
+        parsed_data[key_normalized] = value_clean
+    
+    return parsed_data
+
 # --- Lógica de Limpieza y Extracción de Datos (LederData) ---
 def clean_and_extract(raw_text: str):
-    """Limpia y extrae datos estructurados del texto de LederData"""
     if not raw_text:
         return {"text": "", "fields": {}}
-    
     text = raw_text
-    # Remover etiquetas comunes
     text = re.sub(r"\[#?LEDER_BOT\]", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\[CONSULTA PE\]", "", text, flags=re.IGNORECASE)
-    
-    # Remover encabezados
     header_pattern = r"^\[.*?\]\s*→\s*.*?\[.*?\](\r?\n){1,2}"
     text = re.sub(header_pattern, "", text, flags=re.IGNORECASE | re.DOTALL)
-    
-    # Remover pies de página
     footer_pattern = r"((\r?\n){1,2}\[|Página\s*\d+\/\d+.*|(\r?\n){1,2}Por favor, usa el formato correcto.*|↞ Anterior|Siguiente ↠.*|Credits\s*:.+|Wanted for\s*:.+|\s*@lederdata.*|(\r?\n){1,2}\s*Marca\s*@lederdata.*|(\r?\n){1,2}\s*Créditos\s*:\s*\d+)"
     text = re.sub(footer_pattern, "", text, flags=re.IGNORECASE | re.DOTALL)
-    
-    # Remover líneas divisorias
     text = re.sub(r"\-{3,}", "", text, flags=re.IGNORECASE | re.DOTALL)
-    
-    # Normalizar espacios
     text = re.sub(r"\s+", " ", text)
     text = text.strip()
 
-    # Extraer campos estructurados
     fields = {}
     patterns = {
         "dni": r"DNI\s*:\s*(\d{8})",
@@ -108,33 +136,26 @@ def clean_and_extract(raw_text: str):
             fields[key] = match.group(1).strip()
             text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL)
 
-    # Detectar tipo de foto
     photo_type_match = re.search(r"Foto\s*:\s*(rostro|huella|firma|adverso|reverso).*", text, re.IGNORECASE)
     if photo_type_match:
         fields["photo_type"] = photo_type_match.group(1).lower()
 
-    # Detectar "no encontrado"
     not_found_pattern = r"\[⚠️\]\s*(no se encontro información|no se han encontrado resultados|no se encontró una|no hay resultados|no tenemos datos|no se encontraron registros)"
     if re.search(not_found_pattern, text, re.IGNORECASE | re.DOTALL):
         fields["not_found"] = True
 
-    # Limpiar saltos de línea múltiples
     text = re.sub(r"\n\s*\n", "\n", text).strip()
-    
     return {"text": text, "fields": fields}
 
 def format_nm_response(all_received_messages):
-    """Formatea respuestas de búsqueda por nombres (LederData)"""
     combined_text = ""
     for msg in all_received_messages:
         if msg.get("message"):
             combined_text += msg.get("message", "") + "\n"
     combined_text = combined_text.strip()
-    
     if not combined_text:
         return json.dumps({"status": "success", "message": ""}, ensure_ascii=False)
 
-    # Detectar múltiples resultados
     multi_match = re.search(r"Se encontro\s+(\d+)\s+resultados?\.?", combined_text, re.IGNORECASE)
     if multi_match:
         lines = combined_text.split('\n')
@@ -156,11 +177,11 @@ def format_nm_response(all_received_messages):
         formatted_lines = [line.strip() for line in lines if line.strip() and not line.strip().startswith('[') and 'LEDER' not in line.upper()]
         return json.dumps({"status": "success", "message": '\n'.join(formatted_lines)}, ensure_ascii=False)
 
-# --- NUEVO: Consolidación de respuesta Azura (multi-mensajes -> uno solo) ---
+# --- 🆕 Consolidación de respuesta Azura con Parser Universal ---
 def format_azura_response(all_received_messages):
     """
-    Consolida múltiples mensajes de Azura en una respuesta JSON limpia y ordenada.
-    Retorna toda la información disponible sin recortes.
+    Consolida múltiples mensajes de Azura y aplica el Parser Universal
+    para estructurar automáticamente la respuesta.
     """
     parts = []
     for msg in all_received_messages:
@@ -168,20 +189,27 @@ def format_azura_response(all_received_messages):
         if t:
             parts.append(t)
     
-    # Unir todos los mensajes con saltos de línea
     final_text = "\n".join(parts).strip()
     
-    # Retornar formato JSON estructurado
+    # 🆕 Aplicar Parser Universal
+    parsed_data = universal_parser(final_text)
+    
+    # Si el parser detectó campos estructurados, devolver formato estructurado
+    if parsed_data:
+        return {
+            "status": "success",
+            "data": parsed_data,
+            "raw_message": final_text  # Mantener texto original por si acaso
+        }
+    
+    # Si no se detectaron campos, devolver solo el mensaje
     return {
         "status": "success",
-        "data": {
-            "mensaje_completo": final_text
-        }
+        "message": final_text
     }
 
-# --- Función principal LederData (SIN CAMBIOS FUNCIONALES relevantes) ---
+# --- Función principal LederData con Parser Universal integrado ---
 async def send_telegram_command(command: str, consulta_id: str = None, endpoint_path: str = None):
-    """Envía comando a bots de LederData con lógica de fallback"""
     client = None
     try:
         if API_ID == 0 or not API_HASH or not SESSION_STRING:
@@ -248,7 +276,6 @@ async def send_telegram_command(command: str, consulta_id: str = None, endpoint_
             except Exception as e:
                 print(f"Error en handler: {e}")
 
-        # Enviar comando UNA SOLA VEZ
         await client.send_message(bot_to_use, command)
 
         start_time = time.time()
@@ -265,7 +292,6 @@ async def send_telegram_command(command: str, consulta_id: str = None, endpoint_
 
         client.remove_event_handler(temp_handler)
 
-        # Lógica de fallback al bot de respaldo
         if not all_received_messages:
             if bot_to_use == LEDERDATA_BOT_ID:
                 record_bot_failure(bot_to_use)
@@ -309,7 +335,6 @@ async def send_telegram_command(command: str, consulta_id: str = None, endpoint_
                     except Exception as e:
                         print(f"Error en backup handler: {e}")
 
-                # Enviar comando UNA SOLA VEZ al backup
                 await client.send_message(bot_to_use, command)
 
                 start_time = time.time()
@@ -340,7 +365,6 @@ async def send_telegram_command(command: str, consulta_id: str = None, endpoint_
             await client.disconnect()
 
 async def process_bot_response(client, all_received_messages, command, endpoint_path):
-    """Procesa la respuesta del bot de LederData"""
     if any("formato correcto" in (m["message"] or "").lower() for m in all_received_messages):
         return {"status": "error", "message": "Formato incorrecto."}
 
@@ -360,29 +384,45 @@ async def process_bot_response(client, all_received_messages, command, endpoint_
             except Exception as e:
                 print(f"Error descargando archivo: {e}")
 
-    # Respuestas especiales para búsqueda por nombres
     if endpoint_path in ["/dni_nombres", "/venezolanos_nombres"] or command.startswith(("/nm", "/nmv")):
         return json.loads(format_nm_response(all_received_messages))
 
-    # Consolidar campos y URLs
-    final_fields = {}
+    # 🆕 Aplicar Parser Universal a la respuesta consolidada de LederData
+    combined_text = ""
+    for msg in all_received_messages:
+        if msg.get("message"):
+            combined_text += msg.get("message", "") + "\n"
+    
+    combined_text = combined_text.strip()
+    
+    # Intentar parsear automáticamente
+    parsed_data = universal_parser(combined_text)
+    
+    # Recopilar URLs de archivos
     urls = []
+    for msg in all_received_messages:
+        urls.extend(msg.get("urls", []))
+    
+    # Construir respuesta final con Parser Universal
+    final_fields = {}
     for msg in all_received_messages:
         for k, v in msg.get("fields", {}).items():
             if v and not final_fields.get(k):
                 final_fields[k] = v
-        urls.extend(msg.get("urls", []))
-
+    
+    # Combinar campos extraídos manualmente + parser universal
+    if parsed_data:
+        final_fields.update(parsed_data)
+    
     final_fields["urls"] = urls
     
-    # Retornar respuesta estructurada en JSON
+    # 🆕 Retornar estructura limpia y completa
     return {
         "status": "success",
         "data": final_fields
     }
 
 def run_telegram_command(command: str, consulta_id: str = None, endpoint_path: str = None):
-    """Ejecuta comando de Telegram en nuevo event loop"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -390,16 +430,8 @@ def run_telegram_command(command: str, consulta_id: str = None, endpoint_path: s
     finally:
         loop.close()
 
-# --- NUEVO: Envío a AZURA (API) ---
+# --- 🆕 Envío a AZURA con Parser Universal ---
 async def send_azura_command(command: str, endpoint_path: str = None):
-    """
-    Envía comando a @AzuraSearchServices_bot
-    Reglas:
-    - Enviar comando 1 sola vez
-    - Esperar ~35s
-    - No reintentar / no reenviar
-    - Consolidar múltiples mensajes en respuesta JSON estructurada
-    """
     client = None
     try:
         if API_ID == 0 or not API_HASH or not SESSION_STRING:
@@ -425,7 +457,6 @@ async def send_azura_command(command: str, endpoint_path: str = None):
                 last_message_time[0] = time.time()
                 raw_text = event.raw_text or ""
 
-                # Para Azura: guardamos el texto completo tal cual
                 all_received_messages.append({
                     "message": raw_text,
                     "event_message": event.message
@@ -433,13 +464,10 @@ async def send_azura_command(command: str, endpoint_path: str = None):
             except Exception as e:
                 print(f"Error en azura handler: {e}")
 
-        # Enviar comando UNA SOLA VEZ (muy importante)
         await client.send_message(AZURA_BOT_ID, command)
 
         start_time = time.time()
 
-        # Esperar ~35s, sin reenviar
-        # Si ya llegaron mensajes y pasan ~4.5s sin nuevos, cortamos antes
         while (time.time() - start_time) < AZURA_TIMEOUT:
             if all_received_messages and (time.time() - last_message_time[0]) > 4.5:
                 break
@@ -450,7 +478,7 @@ async def send_azura_command(command: str, endpoint_path: str = None):
         if not all_received_messages:
             return {"status": "error", "message": "No se obtuvo respuesta de @AzuraSearchServices_bot."}
 
-        # Consolidar múltiples mensajes en uno solo con formato JSON limpio
+        # 🆕 Aplicar Parser Universal en la consolidación
         return format_azura_response(all_received_messages)
 
     except Exception as e:
@@ -460,7 +488,6 @@ async def send_azura_command(command: str, endpoint_path: str = None):
             await client.disconnect()
 
 def run_azura_command(command: str, endpoint_path: str = None):
-    """Ejecuta comando de Azura en nuevo event loop"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -470,7 +497,6 @@ def run_azura_command(command: str, endpoint_path: str = None):
 
 # --- HELPER DE COMANDOS (LederData actual) ---
 def get_command_and_param(path, request_args):
-    """Construye comando y parámetros para LederData"""
     cmd = path.lstrip('/')
     p = (
         request_args.get("dni")
@@ -513,22 +539,15 @@ CORS(app)
 
 @app.route("/files/<path:filename>")
 def files(filename):
-    """Sirve archivos descargados"""
     return send_from_directory(DOWNLOAD_DIR, filename)
 
 @app.route("/<path:endpoint>", methods=["GET"])
 def universal_handler(endpoint):
-    """
-    Manejador universal de endpoints.
-    Soporta tanto LederData como Azura.
-    """
     # Especiales existentes
     if endpoint in ["files", "health", "status", "dni_nombres", "venezolanos_nombres"]:
         return handle_special(endpoint)
 
-    # --- NUEVO: Rutas Azura ---
-    # Cualquier endpoint que empiece con "azura_" se envía al bot de Azura
-    # Ejemplo: /azura_bitel?query=946508609 -> envía "/bitel 946508609" a Azura
+    # --- 🆕 Rutas Azura con Parser Universal ---
     if endpoint.startswith("azura_"):
         az_cmd_name = endpoint.replace("azura_", "", 1).strip()
         if not az_cmd_name:
@@ -538,13 +557,12 @@ def universal_handler(endpoint):
         if not p:
             return jsonify({"status": "error", "message": "Parámetro faltante"}), 400
 
-        # Comando final a Azura
         command = f"/{az_cmd_name} {p}"
 
         result = run_azura_command(command, endpoint_path=f"/{endpoint}")
         return jsonify(result)
 
-    # --- Rutas LederData (como siempre) ---
+    # --- Rutas LederData con Parser Universal ---
     command, error = get_command_and_param(endpoint, request.args)
     if error:
         return jsonify({"status": "error", "message": error}), 400
@@ -553,7 +571,6 @@ def universal_handler(endpoint):
     return jsonify(result)
 
 def handle_special(endpoint):
-    """Maneja endpoints especiales del sistema"""
     if endpoint == "status":
         primary_blocked = is_bot_blocked(LEDERDATA_BOT_ID)
         backup_blocked = False
@@ -562,7 +579,7 @@ def handle_special(endpoint):
             "bots": ALL_BOT_IDS,
             "primary_blocked": primary_blocked,
             "backup_blocked": backup_blocked,
-            "primary_blocked_until": bot_fail_tracker.get(LEDERDATA_BOT_ID).isoformat() if primary_blocked else None,
+            "primary_blocked_until": bot_fail_tracker.get(LEDERDATA_BOT_ID) if primary_blocked else None,
             "backup_blocked_until": None
         })
 
