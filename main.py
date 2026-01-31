@@ -452,8 +452,14 @@ def run_telegram_command(command: str, consulta_id: str = None, endpoint_path: s
     finally:
         loop.close()
 
-# --- 🆕 Envío a AZURA con Parser Universal ---
+# --- 🔥 CORRECCIÓN AZURA: UN SOLO ENVÍO, ESPERAR 35s, MENSAJE ESPECÍFICO SI NO HAY RESPUESTA ---
 async def send_azura_command(command: str, endpoint_path: str = None):
+    """
+    ✅ Envía comando a @AzuraSearchServices_bot UNA SOLA VEZ
+    ✅ Espera hasta 35 segundos exactos
+    ✅ NO reenvía el comando bajo ninguna circunstancia
+    ✅ Si no hay respuesta: devuelve "No se encontró resultado en la API base"
+    """
     client = None
     try:
         if API_ID == 0 or not API_HASH or not SESSION_STRING:
@@ -468,6 +474,7 @@ async def send_azura_command(command: str, endpoint_path: str = None):
 
         all_received_messages = []
         last_message_time = [time.time()]
+        command_sent = [False]  # 🔥 Evitar envíos duplicados
 
         @client.on(events.NewMessage(incoming=True))
         async def azura_handler(event):
@@ -486,25 +493,40 @@ async def send_azura_command(command: str, endpoint_path: str = None):
             except Exception as e:
                 print(f"Error en azura handler: {e}")
 
-        await client.send_message(AZURA_BOT_ID, command)
+        # 🔥 ENVÍO ÚNICO DEL COMANDO (sin duplicados)
+        if not command_sent[0]:
+            await client.send_message(AZURA_BOT_ID, command)
+            command_sent[0] = True
+            print(f"✅ Comando enviado a Azura: {command}")
 
         start_time = time.time()
 
+        # 🔥 ESPERAR EXACTAMENTE 35 SEGUNDOS (sin reenvíos)
         while (time.time() - start_time) < AZURA_TIMEOUT:
+            # Si recibimos mensajes y pasaron 4.5s sin nuevos, salir antes
             if all_received_messages and (time.time() - last_message_time[0]) > 4.5:
                 break
             await asyncio.sleep(0.5)
 
         client.remove_event_handler(azura_handler)
 
+        # 🔥 SI NO HAY RESPUESTA: DEVOLVER MENSAJE ESPECÍFICO
         if not all_received_messages:
-            return {"status": "error", "message": "No se obtuvo respuesta de @AzuraSearchServices_bot."}
+            print("⚠️ No se recibió respuesta de Azura en 35 segundos")
+            return {
+                "status": "error",
+                "message": "No se encontró resultado en la API base"
+            }
 
         # 🆕 Aplicar Parser Universal en la consolidación
         return format_azura_response(all_received_messages)
 
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        print(f"❌ Error en send_azura_command: {e}")
+        return {
+            "status": "error",
+            "message": "No se encontró resultado en la API base"
+        }
     finally:
         if client:
             await client.disconnect()
@@ -569,7 +591,7 @@ def universal_handler(endpoint):
     if endpoint in ["files", "health", "status", "dni_nombres", "venezolanos_nombres"]:
         return handle_special(endpoint)
 
-    # --- 🆕 Rutas Azura con Parser Universal ---
+    # --- 🔥 Rutas Azura CORREGIDAS (un solo envío) ---
     if endpoint.startswith("azura_"):
         az_cmd_name = endpoint.replace("azura_", "", 1).strip()
         if not az_cmd_name:
