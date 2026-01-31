@@ -154,7 +154,7 @@ def format_nm_response(all_received_messages):
             combined_text += msg.get("message", "") + "\n"
     combined_text = combined_text.strip()
     if not combined_text:
-        return json.dumps({"status": "success", "message": ""}, ensure_ascii=False)
+        return {"status": "success", "message": ""}
 
     multi_match = re.search(r"Se encontro\s+(\d+)\s+resultados?\.?", combined_text, re.IGNORECASE)
     if multi_match:
@@ -171,11 +171,30 @@ def format_nm_response(all_received_messages):
             if line:
                 cleaned_lines.append(line)
         formatted_text = '\n'.join(cleaned_lines).strip()
-        return json.dumps({"status": "success", "message": formatted_text}, ensure_ascii=False)
+        
+        # 🆕 Aplicar Parser Universal
+        parsed_data = universal_parser(formatted_text)
+        if parsed_data:
+            return {
+                "status": "success",
+                "data": parsed_data,
+                "raw_message": formatted_text
+            }
+        return {"status": "success", "message": formatted_text}
     else:
         lines = combined_text.split('\n')
         formatted_lines = [line.strip() for line in lines if line.strip() and not line.strip().startswith('[') and 'LEDER' not in line.upper()]
-        return json.dumps({"status": "success", "message": '\n'.join(formatted_lines)}, ensure_ascii=False)
+        formatted_text = '\n'.join(formatted_lines)
+        
+        # 🆕 Aplicar Parser Universal
+        parsed_data = universal_parser(formatted_text)
+        if parsed_data:
+            return {
+                "status": "success",
+                "data": parsed_data,
+                "raw_message": formatted_text
+            }
+        return {"status": "success", "message": formatted_text}
 
 # --- 🆕 Consolidación de respuesta Azura con Parser Universal ---
 def format_azura_response(all_received_messages):
@@ -384,8 +403,9 @@ async def process_bot_response(client, all_received_messages, command, endpoint_
             except Exception as e:
                 print(f"Error descargando archivo: {e}")
 
+    # Manejo especial para endpoints de nombres
     if endpoint_path in ["/dni_nombres", "/venezolanos_nombres"] or command.startswith(("/nm", "/nmv")):
-        return json.loads(format_nm_response(all_received_messages))
+        return format_nm_response(all_received_messages)
 
     # 🆕 Aplicar Parser Universal a la respuesta consolidada de LederData
     combined_text = ""
@@ -414,12 +434,14 @@ async def process_bot_response(client, all_received_messages, command, endpoint_
     if parsed_data:
         final_fields.update(parsed_data)
     
-    final_fields["urls"] = urls
+    if urls:
+        final_fields["urls"] = urls
     
     # 🆕 Retornar estructura limpia y completa
     return {
         "status": "success",
-        "data": final_fields
+        "data": final_fields,
+        "raw_message": combined_text  # Mantener mensaje original completo
     }
 
 def run_telegram_command(command: str, consulta_id: str = None, endpoint_path: str = None):
@@ -579,7 +601,7 @@ def handle_special(endpoint):
             "bots": ALL_BOT_IDS,
             "primary_blocked": primary_blocked,
             "backup_blocked": backup_blocked,
-            "primary_blocked_until": bot_fail_tracker.get(LEDERDATA_BOT_ID) if primary_blocked else None,
+            "primary_blocked_until": bot_fail_tracker.get(LEDERDATA_BOT_ID).isoformat() if primary_blocked and bot_fail_tracker.get(LEDERDATA_BOT_ID) else None,
             "backup_blocked_until": None
         })
 
