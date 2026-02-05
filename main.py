@@ -601,6 +601,26 @@ def universal_handler(endpoint):
         result = run_azura_command(command, endpoint_path=f"/{endpoint}")
         return jsonify(result)
 
+    # --- 🆕 NUEVOS COMANDOS AZURA ESPECÍFICOS ---
+    azura_commands_mapping = {
+        "licencia": "licencia",
+        "mtc": "mtc",
+        "papeletas": "papeletas",
+        "soat": "soat",
+        "placar": "placar",
+        "placa": "placa",
+        "placab": "placab"
+    }
+    
+    if endpoint in azura_commands_mapping:
+        p = request.args.get("dni") or request.args.get("query") or request.args.get("param") or request.args.get("placa")
+        if not p:
+            return jsonify({"status": "error", "message": "Parámetro faltante"}), 400
+        
+        command = f"/{azura_commands_mapping[endpoint]} {p}"
+        result = run_azura_command(command, endpoint_path=f"/{endpoint}")
+        return jsonify(result)
+
     # --- Rutas LederData con Parser Universal ---
     command, error = get_command_and_param(endpoint, request.args)
     if error:
