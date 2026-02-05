@@ -617,6 +617,7 @@ def universal_handler(endpoint):
         if not p:
             return jsonify({"status": "error", "message": "Parámetro faltante"}), 400
         
+        # 🔹 Cambio importante: Enviar al bot Azura en lugar de Lederdata
         command = f"/{azura_commands_mapping[endpoint]} {p}"
         result = run_azura_command(command, endpoint_path=f"/{endpoint}")
         return jsonify(result)
