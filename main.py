@@ -196,12 +196,11 @@ def format_nm_response(all_received_messages):
             }
         return {"status": "success", "message": formatted_text}
 
-# --- 🆕 Consolidación de respuesta Azura con Parser Universal y filtro ---
+# --- 🆕 Consolidación de respuesta Azura con Parser Universal ---
 def format_azura_response(all_received_messages):
     """
     Consolida múltiples mensajes de Azura y aplica el Parser Universal
     para estructurar automáticamente la respuesta.
-    Elimina el texto específico de LENTES y @mgl_angel
     """
     parts = []
     for msg in all_received_messages:
@@ -210,12 +209,6 @@ def format_azura_response(all_received_messages):
             parts.append(t)
     
     final_text = "\n".join(parts).strip()
-    
-    # 🔹 ELIMINAR TEXTO NO DESEADO: "LENTES\n\nRealizada por ➟ @mgl_angel"
-    final_text = re.sub(r'LENTES\s*\n*\s*Realizada por ➟ @mgl_angel', '', final_text, flags=re.IGNORECASE)
-    final_text = re.sub(r'@mgl_angel', '', final_text, flags=re.IGNORECASE)
-    final_text = re.sub(r'\n\s*\n\s*\n', '\n\n', final_text)  # Limpiar líneas vacías múltiples
-    final_text = final_text.strip()
     
     # 🆕 Aplicar Parser Universal
     parsed_data = universal_parser(final_text)
@@ -459,7 +452,7 @@ def run_telegram_command(command: str, consulta_id: str = None, endpoint_path: s
     finally:
         loop.close()
 
-# --- 🆕 Envío a AZURA con Parser Universal y descarga de archivos ---
+# --- 🆕 Envío a AZURA con Parser Universal - CORREGIDO PARA ENVÍO ÚNICO ---
 async def send_azura_command(command: str, endpoint_path: str = None):
     client = None
     try:
@@ -486,25 +479,11 @@ async def send_azura_command(command: str, endpoint_path: str = None):
 
                 last_message_time[0] = time.time()
                 raw_text = event.raw_text or ""
-                
-                msg_obj = {
+
+                all_received_messages.append({
                     "message": raw_text,
-                    "event_message": event.message,
-                    "urls": []
-                }
-                
-                # 🔹 DESCARGAR ARCHIVOS ADJUNTOS (PDF o imágenes)
-                if event.message and getattr(event.message, "media", None):
-                    try:
-                        ext = ".pdf" if "pdf" in str(event.message.media).lower() else ".jpg"
-                        fname = f"{int(time.time())}_{event.message.id}{ext}"
-                        path = await client.download_media(event.message, file=os.path.join(DOWNLOAD_DIR, fname))
-                        if path:
-                            msg_obj["urls"].append({"url": f"{PUBLIC_URL}/files/{fname}", "type": "document"})
-                    except Exception as e:
-                        print(f"Error descargando archivo de Azura: {e}")
-                
-                all_received_messages.append(msg_obj)
+                    "event_message": event.message
+                })
                 
                 # Marcar que ya recibimos respuesta para detener la espera
                 if raw_text:
@@ -538,7 +517,7 @@ async def send_azura_command(command: str, endpoint_path: str = None):
         if not all_received_messages:
             return {"status": "error", "message": "No se encontró resultado en la API base"}
 
-        # 🆕 Aplicar Parser Universal en la consolidación con filtro
+        # 🆕 Aplicar Parser Universal en la consolidación
         return format_azura_response(all_received_messages)
 
     except Exception as e:
@@ -622,29 +601,7 @@ def universal_handler(endpoint):
         result = run_azura_command(command, endpoint_path=f"/{endpoint}")
         return jsonify(result)
 
-    # --- 🆕 NUEVOS COMANDOS AZURA ESPECÍFICOS - ENVIADOS AL BOT AZURA ---
-    azura_commands_mapping = {
-        "licencia": "licencia",
-        "mtc": "mtc",
-        "papeletas": "papeletas",
-        "soat": "soat",
-        "placar": "placar",
-        "placa": "placa",
-        "placab": "placab"
-    }
-    
-    if endpoint in azura_commands_mapping:
-        p = request.args.get("dni") or request.args.get("query") or request.args.get("param") or request.args.get("placa")
-        if not p:
-            return jsonify({"status": "error", "message": "Parámetro faltante"}), 400
-        
-        command = f"/{azura_commands_mapping[endpoint]} {p}"
-        
-        # 🔹 ENVIAR AL BOT AZURA, NO AL BOT LEDERDATA
-        result = run_azura_command(command, endpoint_path=f"/{endpoint}")
-        return jsonify(result)
-
-    # --- Rutas LederData con Parser Universal (solo comandos LederData) ---
+    # --- Rutas LederData con Parser Universal ---
     command, error = get_command_and_param(endpoint, request.args)
     if error:
         return jsonify({"status": "error", "message": error}), 400
