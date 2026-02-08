@@ -548,6 +548,7 @@ def get_command_and_param(path, request_args):
         or request_args.get("placa")
         or request_args.get("serie_armamento")
         or request_args.get("clave_denuncia")
+        or request_args.get("razon_social")  # 🆕 Agregado para SUNAT RAZÓN SOCIAL
     )
 
     mapping = {
@@ -564,7 +565,8 @@ def get_command_and_param(path, request_args):
         "denar": f"/denar {p}",
         "dencl": f"/dencl {p}",
         "cafp": f"/cafp {p}",
-        "sbs": f"/sbs {p}"
+        "sbs": f"/sbs {p}",
+        "sunr": f"/sunr {p}"  # 🆕 Agregado para SUNAT RAZÓN SOCIAL
     }
 
     final_cmd = mapping.get(cmd)
@@ -599,6 +601,31 @@ def universal_handler(endpoint):
         command = f"/{az_cmd_name} {p}"
 
         result = run_azura_command(command, endpoint_path=f"/{endpoint}")
+        return jsonify(result)
+
+    # --- 🆕 Lógica especial para SUNAT RAZÓN SOCIAL ---
+    if endpoint == "sunr":
+        razon_social = request.args.get("razon_social") or request.args.get("query")
+        if not razon_social:
+            return jsonify({"status": "error", "message": "Parámetro faltante"}), 400
+        
+        # Validar mínimo 3 caracteres
+        if len(razon_social.strip()) < 3:
+            return jsonify({"status": "error", "message": "Por favor, usa el formato correcto. [‼️]"}), 400
+        
+        # Validar que no sea numérico
+        if razon_social.strip().isdigit():
+            return jsonify({"status": "error", "message": "Por favor, usa el formato correcto. [‼️]"}), 400
+        
+        # Validar que no contenga caracteres especiales como |
+        if "|" in razon_social:
+            return jsonify({"status": "error", "message": "Por favor, usa el formato correcto. [‼️]"}), 400
+        
+        # Formatear comando para el bot
+        command = f"/sunr {razon_social.strip()}"
+        
+        # Ejecutar comando con LederData
+        result = run_telegram_command(command, endpoint_path=f"/{endpoint}")
         return jsonify(result)
 
     # --- Rutas LederData con Parser Universal ---
