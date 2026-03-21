@@ -1,10 +1,10 @@
-# fly.toml app configuration file generated for bankend-tlgm on 2026-01-17T19:38:02Z
+# fly.toml app configuration file generated for bankend-tlgm-2p on 2026-03-21T18:21:25Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'bankend-tlgm'
-primary_region = 'gru'
+app = 'bankend-tlgm-2p'
+primary_region = 'iad'
 
 [build]
 
