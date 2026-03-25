@@ -12,10 +12,10 @@ primary_region = 'iad'
   processes = ['app']
   idle_timeout = '300s'
 
-  # CONFIGURACIÓN DE DESPERTADO SEGURO (Anti-Error PM05)
+  # CONFIGURACIÓN PARA EVITAR EL ERROR PM05
   [[http_service.checks]]
-    grace_period = "40s"  # Le damos 40s para que cargue todo antes de fallar
-    interval = "20s"      # Revisar cada 20s una vez activa
+    grace_period = "50s"  # Aumentado a 50s para dar tiempo de carga total
+    interval = "20s"      # Revisar cada 20s después del arranque
     method = "GET"
     timeout = "5s"
     path = "/health"
