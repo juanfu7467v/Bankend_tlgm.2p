@@ -10,16 +10,14 @@ primary_region = 'iad'
   auto_start_machines = true
   min_machines_running = 0
   processes = ['app']
-  
-  # Tiempo que espera antes de apagar la app por inactividad (5 min)
   idle_timeout = '300s'
 
   [[http_service.checks]]
-    grace_period = "30s" # Tiempo de espera inicial para que Gunicorn levante
-    interval = "15s"     # Frecuencia de revisión
+    grace_period = "60s"  # Aumentado para dar tiempo a que cargue Telethon
+    interval = "15s"
     method = "GET"
     timeout = "5s"
-    path = "/health"    # ESTA RUTA DEBE EXISTIR EN TU main.py
+    path = "/health"
 
 [[vm]]
   cpu_kind = 'shared'
