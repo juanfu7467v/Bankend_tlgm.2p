@@ -5,8 +5,16 @@
 
 app = 'bankend-tlgm-2p'
 primary_region = 'iad'
+kill_signal = 'SIGINT'
+kill_timeout = 30
 
 [build]
+
+[env]
+  PORT = '8080'
+
+[processes]
+  app = 'gunicorn main:app --bind 0.0.0.0:8080 --workers 1 --threads 8 --worker-class gthread --timeout 120 --graceful-timeout 30 --keep-alive 65 --access-logfile - --error-logfile - --capture-output --log-level info'
 
 [http_service]
   internal_port = 8080
@@ -15,6 +23,18 @@ primary_region = 'iad'
   auto_start_machines = true
   min_machines_running = 0
   processes = ['app']
+
+  [http_service.concurrency]
+    type = 'requests'
+    soft_limit = 20
+    hard_limit = 25
+
+  [[http_service.checks]]
+    grace_period = '20s'
+    interval = '30s'
+    method = 'GET'
+    path = '/health'
+    timeout = '10s'
 
 [[vm]]
   memory = '512mb'
