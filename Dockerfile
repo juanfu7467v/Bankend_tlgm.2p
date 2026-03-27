@@ -1,23 +1,25 @@
-FROM python:3.12.12 AS builder
+FROM python:3.12-slim
+
+# Instalar dependencias de sistema necesarias (opcional pero recomendado)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-RUN python -m venv .venv
-
-COPY requirements.txt ./
-RUN .venv/bin/pip install --no-cache-dir -r requirements.txt
-
-FROM python:3.12.12-slim
-
-WORKDIR /app
-
+# Variables de entorno para Python
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PATH="/usr/local/bin:$PATH"
 
-COPY --from=builder /app/.venv /app/.venv
+# Instalar dependencias directamente en el sistema de la imagen
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
+# Copiar el código de la aplicación
 COPY . .
 
 EXPOSE 8080
 
-CMD ["/app/.venv/bin/gunicorn", "main:app", "--bind", "0.0.0.0:8080", "--workers", "1", "--worker-class", "gthread", "--threads", "4", "--timeout", "180", "--graceful-timeout", "30", "--keep-alive", "30", "--access-logfile", "-", "--error-logfile", "-", "--capture-output"]
+# Comando simplificado (ahora gunicorn estará en el PATH)
+CMD ["gunicorn", "main:app", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--worker-class", "gthread"]
