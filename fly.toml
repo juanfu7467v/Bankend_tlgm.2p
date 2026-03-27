@@ -1,8 +1,3 @@
-# fly.toml app configuration file generated for bankend-tlgm-2p on 2026-03-26T01:49:06Z
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
-
 app = 'bankend-tlgm-2p'
 primary_region = 'iad'
 kill_signal = 'SIGTERM'
@@ -24,7 +19,8 @@ kill_timeout = 30
     hard_limit = 25
 
   [[http_service.checks]]
-    grace_period = '15s'
+    # Aumentamos a 30s para dar tiempo a la conexión de Telegram
+    grace_period = '30s'
     interval = '30s'
     method = 'GET'
     timeout = '5s'
@@ -34,4 +30,3 @@ kill_timeout = 30
   memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 512
