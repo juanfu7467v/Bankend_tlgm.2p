@@ -812,6 +812,8 @@ def handle_special(endpoint):
         return jsonify(res)
 
     return jsonify({"error": "Not found"}), 404
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT, threaded=True)
+    # Importante: Fly.io requiere que escuche en 0.0.0.0
+    # Usamos el puerto 8080 por defecto que es el estándar de Fly
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port, threaded=True)
