@@ -45,8 +45,8 @@ _last_cleanup_ts = 0.0
 _cleanup_lock = Lock()
 
 # --- Bots LederData (NO MODIFICAR LÓGICA) ---
-LEDERDATA_BOT_ID = "@LEDERDATA_OFC_BOT"
-LEDERDATA_BACKUP_BOT_ID = "@lederdata_publico_bot"
+LEDERDATA_BOT_ID = "@lederdata_oficial_bot"
+LEDERDATA_BACKUP_BOT_ID = "@lederdata_oficial_bot"
 ALL_BOT_IDS = [LEDERDATA_BOT_ID, LEDERDATA_BACKUP_BOT_ID]
 
 TIMEOUT_PRIMARY = 35
